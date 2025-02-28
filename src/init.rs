@@ -5,12 +5,12 @@ use bincode;
 use std::error::Error;
 
 use crate::unifunctions::{
-    ImagePacket, TextPacket, 
+    UniPacket,
     create_initiation_message,
     InitiationMessage,
     get_broadcast_address
 };
-use crate::uniclip::{handle_incoming_txt, handle_incoming_img};
+use crate::uniclip::{handle_incoming_txt, handle_incoming_img_chunk};
 
 lazy_static! {
     pub static ref IP_REGISTER: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -22,9 +22,16 @@ pub async fn initial_check() -> Result<(), Box<dyn Error>> {
     socket.set_broadcast(true).expect("Enable broadcast failed");
 
     let broadcast_addr = get_broadcast_address().unwrap();
-    let message = b"DISCOVER_SIGNAL";
 
-    if let Err(e) = socket.send_to(message, broadcast_addr)
+    let packet = match bincode::serialize(&UniPacket::DiscoverySignal) {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            error!("Discovery packet serialization error.");
+            return Err(Box::new(e));
+        },
+    };
+
+    if let Err(e) = socket.send_to(&packet, broadcast_addr)
         .await {
             error!("Send broadcast failed: {}", e);
             return Err(Box::new(e));
@@ -90,8 +97,9 @@ pub async fn master_broadcast() {
 
         let received = &buf[..size];
 
-        if received == b"DISCOVER_SIGNAL" {
-            info!("DISCOVER_SIGNAL received from {}", src);
+        match bincode::deserialize::<UniPacket>(received) {
+            Ok(UniPacket::DiscoverySignal) => {
+                info!("DISCOVER_SIGNAL received from {}", src);
 
             let init_msg = match create_initiation_message().await {
                 Ok(msg) => msg,
@@ -114,20 +122,24 @@ pub async fn master_broadcast() {
                     error!("InitMsg send failed: {}", e);
                 }
             add_ip(src.ip().to_string()).await;
-        } else if let Ok(text_packet) = bincode::deserialize::<TextPacket>(received) {
-            if let Err(e) = handle_incoming_txt(
-                String::from_utf8_lossy(&text_packet.text).into_owned()
-            ).await {
-                error!("Failed to handle incoming text from {}: {}", src, e);
             }
-        } else if let Ok(image_packet) = bincode::deserialize::<ImagePacket>(received) {
-            if let Err(e) = handle_incoming_img(
-                image_packet
-            ).await {
-                error!("Failed to handle incoming img from {}: {}", src, e);
+            Ok(UniPacket::Text(text_packet)) => {
+                if let Err(e) = handle_incoming_txt(
+                    String::from_utf8_lossy(&text_packet.text).into_owned()
+                ).await {
+                    error!("Failed to handle incoming text from {}: {}", src, e);
+                }
             }
-        } else {
-            error!("Received unknown packet from {}", src);
+            Ok(UniPacket::ImageChunk(image_chunk_packet)) => {
+                if let Err(e) = handle_incoming_img_chunk(
+                    image_chunk_packet
+                ).await {
+                    error!("Failed to handle incoming img from {}: {}", src, e);
+                }
+            }
+            Err(_) => {
+                error!("Received unkown packet from {}", src);
+            }
         }
     }
 }
@@ -137,8 +149,8 @@ async fn add_ip(ip: String) {
 
     if !ip_register.contains(&ip.to_string()) {
         ip_register.push(ip.to_string());
-        info!("Added new slave: {}", ip);
+        info!("Added new peer: {}", ip);
     } else {
-        info!("Slave already exists: {}", ip);
+        info!("Peer already exists: {}", ip);
     }
 }

@@ -1,7 +1,7 @@
-use std::{borrow::Cow, error::Error};
+use std::{borrow::Cow, error::Error, collections::HashMap};
 use arboard::{Clipboard, ImageData};
 use tokio::{
-    time::{sleep, Duration},
+    time::{sleep, Duration, Instant},
     sync::Mutex, 
     task::JoinError
 };
@@ -11,7 +11,8 @@ use crate::unifunctions::{
     share_clip_text, 
     share_clip_img, 
     hash_img,
-    ImagePacket
+    ImageChunkPacket,
+    cleanup_stale_chunks
 };
 
 lazy_static! {
@@ -22,15 +23,33 @@ lazy_static! {
     pub static ref LAST_CLIP_IMG_HASH: Mutex<String> = Mutex::new(String::new());
 }
 
+lazy_static! {
+    pub static ref IMAGE_CHUNKS: Mutex<HashMap<String, (
+        Vec<Option<Vec<u8>>>, 
+        usize, 
+        usize, 
+        u32, 
+        Instant
+    )>> = Mutex::new(HashMap::new());
+}
 
 
 pub async fn master_uniclip() {
     let clipboard_listen = tokio::spawn(
         listen_clipboard_changes()
     );
+    let chunk_cleaner = tokio::spawn(
+        cleanup_stale_chunks()
+    );
 
-    if let Err(e) = clipboard_listen.await {
+    let (res1, res2) = tokio::join!(clipboard_listen, chunk_cleaner);
+
+    if let Err(e) = res1 {
         log_task_error("master clip listen", e);
+    }
+
+    if let Err(e) = res2 {
+        log_task_error("cleanup stale chunks", e);
     }
 }
 
@@ -63,7 +82,7 @@ async fn listen_clipboard_changes() {
 
         if let Ok(content) = clipboard.get_image() {
             let current_hash = hash_img(&content);
-
+            
             if last_clip_img_hash.is_empty() || *last_clip_img_hash != current_hash {
                 *last_clip_img_hash = current_hash.clone();
                 if let Err(e) = share_clip_img(content, current_hash)
@@ -98,29 +117,58 @@ pub async fn handle_incoming_txt(text: String) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub async fn handle_incoming_img(img_packet: ImagePacket) -> Result<(), Box<dyn Error>> {
-    let mut last_clip_img_hash = LAST_CLIP_IMG_HASH.lock().await;
+pub async fn handle_incoming_img_chunk(chunk_packet: ImageChunkPacket) -> Result<(), Box<dyn Error>> {
+    let mut image_chunks = IMAGE_CHUNKS.lock().await;
 
-    if img_packet.hash != *last_clip_img_hash {
-        info!("Clip img received");
-        let mut clipboard = match Clipboard::new(){
-            Ok(cb) => cb,
-            Err(e) => {
-                error!("Failed to open clipboard: {}", e);
-                return Err(Box::new(e));
-            }
-        };
-        *last_clip_img_hash = img_packet.hash.clone();
-        let img = ImageData {
-            width: img_packet.width,
-            height: img_packet.height,
-            bytes: Cow::from(img_packet.bytes),
-        };
-        if let Err(e) = clipboard.set_image(img.clone()) {
-            error!("Incoming img clip set failed: {}", e);
-            return Err(Box::new(e));
-        }
+    let entry = image_chunks.entry(
+        chunk_packet.hash.clone()
+    ).or_insert_with(|| {
+        (vec![None; chunk_packet.total_chunks as usize], chunk_packet.width, chunk_packet.height, chunk_packet.total_chunks, Instant::now())
+    });
+
+    let (chunks, width, height, _, _) = entry;
+
+    if chunk_packet.chunk_index as usize >= chunks.len() {
+        error!("Received chunk out of bounds.");
+        return Err(Box::new(
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid chunk index")
+        ));
     }
 
+    chunks[chunk_packet.chunk_index as usize] = Some(chunk_packet.chunk_data);
+
+    if chunks.iter().all(|c| c.is_some()) {
+        let complete_data: Vec<u8> = chunks.iter().filter_map(
+            |c| c.clone()
+        ).flatten().collect();
+
+        let img_packet = ImageData {
+            width: *width,
+            height: *height,
+            bytes: Cow::from(complete_data),
+        };
+
+        let mut last_clip_img_hash = LAST_CLIP_IMG_HASH.lock().await;
+
+        if chunk_packet.hash != *last_clip_img_hash {
+            let mut clipboard = match Clipboard::new(){
+                Ok(cb) => cb,
+                Err(e) => {
+                    error!("Failed to open clipboard: {}", e);
+                    return Err(Box::new(e));
+                }
+            };
+            *last_clip_img_hash = chunk_packet.hash.clone();
+
+            if let Err(e) = clipboard.set_image(img_packet.clone()) {
+                error!("Incoming img clip set failed: {}", e);
+                return Err(Box::new(e));
+            }
+
+            image_chunks.remove(&chunk_packet.hash);
+
+            info!("Image successfully reconstructed and set to clipboard");
+        }
+    }
     Ok(())
 }
