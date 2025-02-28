@@ -7,7 +7,8 @@ use std::error::Error;
 use crate::unifunctions::{
     ImagePacket, TextPacket, 
     create_initiation_message,
-    InitiationMessage
+    InitiationMessage,
+    get_broadcast_address
 };
 use crate::uniclip::{handle_incoming_txt, handle_incoming_img};
 
@@ -16,11 +17,11 @@ lazy_static! {
 }
 
 pub async fn initial_check() -> Result<(), Box<dyn Error>> {
-    let socket = UdpSocket::bind("0.0.0.0:0")
+    let socket = UdpSocket::bind("0.0.0.0:26025")
         .await.expect("Bind client socket failed");
     socket.set_broadcast(true).expect("Enable broadcast failed");
 
-    let broadcast_addr = "255.255.255.255:26025";
+    let broadcast_addr = get_broadcast_address().unwrap();
     let message = b"DISCOVER_SIGNAL";
 
     if let Err(e) = socket.send_to(message, broadcast_addr)
@@ -90,7 +91,7 @@ pub async fn master_broadcast() {
         let received = &buf[..size];
 
         if received == b"DISCOVER_SIGNAL" {
-            info!("Received '{:#?}' from {}", received, src);
+            info!("DISCOVER_SIGNAL received from {}", src);
 
             let init_msg = match create_initiation_message().await {
                 Ok(msg) => msg,

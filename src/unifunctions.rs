@@ -4,9 +4,9 @@ use sha2::{Sha256, Digest};
 use hex;
 use bincode;
 use serde::{Serialize, Deserialize};
-use std::error::Error;
+use std::{error::Error, net::Ipv4Addr};
 use log::{error, info};
-use get_if_addrs::get_if_addrs;
+use get_if_addrs::{get_if_addrs, IfAddr};
 use crate::init::IP_REGISTER;
 
 #[derive(Serialize, Deserialize)]
@@ -129,4 +129,34 @@ pub async fn create_initiation_message() -> Result<InitiationMessage, Box<dyn Er
             ip_list
         }
     )
+}
+
+pub fn get_broadcast_address() -> Option<String> {
+    let interfaces = get_if_addrs().ok()?;
+    let mut broadcast_addr = None;
+
+    for iface in interfaces {
+        if iface.is_loopback() || iface.name.contains("vpn") || iface.name.contains("Virtual") {
+            continue;
+        }
+
+        if let IfAddr::V4(ip_info) = iface.addr {
+            let ip = ip_info.ip;
+            let netmask = ip_info.netmask;
+
+            if netmask.octets() == [0, 0, 0, 0] {
+                continue;
+            }
+
+            let broadcast_ip = Ipv4Addr::from(u32::from(ip) | !u32::from(netmask));
+
+            if broadcast_addr.is_none() || iface.name.contains("eth") || iface.name.contains("wlan") {
+                broadcast_addr = Some(format!("{}:26025", broadcast_ip));
+            }
+        }
+    }
+
+    let result = broadcast_addr.unwrap_or_else(|| "255.255.255.255:26025".to_string());
+    info!("Broadcast IP set to {}", result);
+    Some(result)
 }
