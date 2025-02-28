@@ -10,6 +10,13 @@ use get_if_addrs::{get_if_addrs, IfAddr};
 use crate::{init::IP_REGISTER, uniclip::IMAGE_CHUNKS};
 
 #[derive(Serialize, Deserialize)]
+pub enum UniPacket {
+    DiscoverySignal,
+    Text(TextPacket),
+    ImageChunk(ImageChunkPacket)
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct TextPacket {
     pub text: Vec<u8>,
 }
@@ -18,9 +25,9 @@ pub async fn share_clip_text(item: String) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:0")
         .await.expect("Text-share UDP socket failed");
 
-    let packet = TextPacket {
+    let packet = UniPacket::Text(TextPacket {
         text: item.as_bytes().to_vec(),
-    };
+    });
 
     let message = match bincode::serialize(&packet) {
         Ok(msg) => msg,
@@ -69,14 +76,14 @@ pub async fn share_clip_img(
     let ip_register = IP_REGISTER.lock().await;
 
     for (index, chunk) in item.bytes.chunks(chunk_size).enumerate() {
-        let packet = ImageChunkPacket {
+        let packet = UniPacket::ImageChunk(ImageChunkPacket {
             hash: hash.clone(),
             chunk_index: index as u32,
             total_chunks,
             width: item.width,
             height: item.height,
             chunk_data: chunk.to_vec()
-        };
+        });
 
         let message = match bincode::serialize(&packet) {
             Ok(msg) => msg,
