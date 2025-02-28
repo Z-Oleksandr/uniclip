@@ -131,15 +131,33 @@ pub async fn create_initiation_message() -> Result<InitiationMessage, Box<dyn Er
 
     let interfaces = get_if_addrs()?;
 
+    let mut selected_own_ip: Option<String> = None;
+
     for iface in interfaces {
         if iface.is_loopback() {
             continue;
         }
 
         if let std::net::IpAddr::V4(ip_own) = iface.ip() {
-            ip_list.push(ip_own.to_string());
-            info!("Own ip sent: {}", ip_own);
+            let octets = ip_own.octets();
+
+            let is_private = (
+                octets[0] == 10 ||
+                octets[0] == 192 && octets[1] == 168) ||
+                (octets[0] == 172 && (16..=31).contains(&octets[1])
+            );
+
+            if is_private {
+                if selected_own_ip.is_none() || (octets[0] == 192 && octets[1] == 168) {
+                    selected_own_ip = Some(ip_own.to_string());
+                }
+            }
         }
+    }
+
+    if let Some(ref ip) = selected_own_ip {
+        ip_list.push(ip.to_string());
+        info!("Own ip sent: {}", ip);
     }
 
     Ok(
