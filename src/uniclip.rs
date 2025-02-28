@@ -82,8 +82,6 @@ async fn listen_clipboard_changes() {
 
         if let Ok(content) = clipboard.get_image() {
             let current_hash = hash_img(&content);
-
-            info!("Net img in clipboard. Hash: {}", &current_hash);
             
             if last_clip_img_hash.is_empty() || *last_clip_img_hash != current_hash {
                 *last_clip_img_hash = current_hash.clone();

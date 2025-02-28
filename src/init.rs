@@ -149,8 +149,8 @@ async fn add_ip(ip: String) {
 
     if !ip_register.contains(&ip.to_string()) {
         ip_register.push(ip.to_string());
-        info!("Added new slave: {}", ip);
+        info!("Added new peer: {}", ip);
     } else {
-        info!("Slave already exists: {}", ip);
+        info!("Peer already exists: {}", ip);
     }
 }
