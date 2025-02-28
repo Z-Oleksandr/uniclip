@@ -1,13 +1,13 @@
 use arboard::ImageData;
-use tokio::net::UdpSocket;
+use tokio::{net::UdpSocket, time::{sleep, Duration, Instant}};
 use sha2::{Sha256, Digest};
 use hex;
 use bincode;
 use serde::{Serialize, Deserialize};
 use std::{error::Error, net::Ipv4Addr};
-use log::{error, info};
+use log::{error, info, warn};
 use get_if_addrs::{get_if_addrs, IfAddr};
-use crate::init::IP_REGISTER;
+use crate::{init::IP_REGISTER, uniclip::IMAGE_CHUNKS};
 
 #[derive(Serialize, Deserialize)]
 pub struct TextPacket {
@@ -36,7 +36,7 @@ pub async fn share_clip_text(item: String) -> Result<(), Box<dyn Error>> {
         let address = format!("{}:26025", ip);
         if let Err(e) = socket
             .send_to(&message, &address).await {
-                error!("Text-share send failed to {}: {}", address, e);
+                error!("Text-share send failed to {}", address);
                 return Err(Box::new(e));
         }
     }
@@ -44,12 +44,14 @@ pub async fn share_clip_text(item: String) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct ImagePacket {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ImageChunkPacket {
+    pub hash: String,
+    pub chunk_index: u32,
+    pub total_chunks: u32,
     pub width: usize,
     pub height: usize,
-    pub bytes: Vec<u8>,
-    pub hash: String,
+    pub chunk_data: Vec<u8>,
 }
 
 pub async fn share_clip_img(
@@ -59,29 +61,38 @@ pub async fn share_clip_img(
     let socket = UdpSocket::bind("0.0.0.0:0")
         .await.expect("Img-share UDP socket failed");
     
-    let packet = ImagePacket {
-        width: item.width,
-        height: item.height,
-        bytes: item.bytes.to_vec(),
-        hash
-    };
-
-    let message = match bincode::serialize(&packet) {
-        Ok(msg) => msg,
-        Err(e) => {
-            error!("Serialization of img packet failed: {}", e);
-            return Err(Box::new(e));
-        }
-    };
+    let chunk_size = 60_000;
+    let total_chunks = (
+        item.bytes.len() as f32 / chunk_size as f32
+    ).ceil() as u32;
 
     let ip_register = IP_REGISTER.lock().await;
 
-    for ip in ip_register.iter() {
-        let address = format!("{}:26025", ip);
-        if let Err(e) = socket
-            .send_to(&message, &address).await {
-                error!("Img-share send failed to {}: {}", address, e);
+    for (index, chunk) in item.bytes.chunks(chunk_size).enumerate() {
+        let packet = ImageChunkPacket {
+            hash: hash.clone(),
+            chunk_index: index as u32,
+            total_chunks,
+            width: item.width,
+            height: item.height,
+            chunk_data: chunk.to_vec()
+        };
+
+        let message = match bincode::serialize(&packet) {
+            Ok(msg) => msg,
+            Err(e) => {
+                error!("Serialization of img packet failed: {}", e);
                 return Err(Box::new(e));
+            }
+        };
+    
+        for ip in ip_register.iter() {
+            let address = format!("{}:26025", ip);
+            if let Err(e) = socket
+                .send_to(&message, &address).await {
+                    error!("Img-share send failed to {}", address);
+                    return Err(Box::new(e));
+            }
         }
     }
 
@@ -160,3 +171,21 @@ pub fn get_broadcast_address() -> Option<String> {
     info!("Broadcast IP set to {}", result);
     Some(result)
 }
+
+pub async fn cleanup_stale_chunks() {
+    loop {
+        sleep(Duration::from_secs(60)).await;
+
+        let mut image_chunks = IMAGE_CHUNKS.lock().await;
+        let now = Instant::now();
+
+        image_chunks.retain(|_, (_, _, _, _, timestamp)| {
+            if now.duration_since(*timestamp) > Duration::from_secs(60) {
+                warn!("Removing stale image chunks");
+                false
+            } else {
+                true
+            }
+        });
+    }
+} 

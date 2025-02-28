@@ -5,12 +5,12 @@ use bincode;
 use std::error::Error;
 
 use crate::unifunctions::{
-    ImagePacket, TextPacket, 
+    ImageChunkPacket, TextPacket, 
     create_initiation_message,
     InitiationMessage,
     get_broadcast_address
 };
-use crate::uniclip::{handle_incoming_txt, handle_incoming_img};
+use crate::uniclip::{handle_incoming_txt, handle_incoming_img_chunk};
 
 lazy_static! {
     pub static ref IP_REGISTER: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -120,9 +120,9 @@ pub async fn master_broadcast() {
             ).await {
                 error!("Failed to handle incoming text from {}: {}", src, e);
             }
-        } else if let Ok(image_packet) = bincode::deserialize::<ImagePacket>(received) {
-            if let Err(e) = handle_incoming_img(
-                image_packet
+        } else if let Ok(image_chunk_packet) = bincode::deserialize::<ImageChunkPacket>(received) {
+            if let Err(e) = handle_incoming_img_chunk(
+                image_chunk_packet
             ).await {
                 error!("Failed to handle incoming img from {}: {}", src, e);
             }
