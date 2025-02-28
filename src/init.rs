@@ -16,7 +16,7 @@ lazy_static! {
 }
 
 pub async fn initial_check() -> Result<(), Box<dyn Error>> {
-    let socket = UdpSocket::bind("0.0.0.0:0")
+    let socket = UdpSocket::bind("0.0.0.0:26025")
         .await.expect("Bind client socket failed");
     socket.set_broadcast(true).expect("Enable broadcast failed");
 

@@ -53,7 +53,6 @@ async fn listen_clipboard_changes() {
 
         if let Ok(content) = clipboard.get_text() {
             if content != *last_clip_text {
-                info!("New clipboard text: {}", content);
                 *last_clip_text = content.clone();
                 if let Err(e) = share_clip_text(content)
                     .await {
@@ -66,7 +65,6 @@ async fn listen_clipboard_changes() {
             let current_hash = hash_img(&content);
 
             if last_clip_img_hash.is_empty() || *last_clip_img_hash != current_hash {
-                info!("New clipboard img!");
                 *last_clip_img_hash = current_hash.clone();
                 if let Err(e) = share_clip_img(content, current_hash)
                     .await {
@@ -82,7 +80,7 @@ pub async fn handle_incoming_txt(text: String) -> Result<(), Box<dyn Error>> {
     let mut last_clip_text = LAST_CLIP_TEXT.lock().await;
 
     if text != *last_clip_text {
-        println!("Adding new incoming text: {}", text);
+        info!("Clip text received");
         let mut clipboard = match Clipboard::new() {
             Ok(cb) => cb,
             Err(e) => {
@@ -104,7 +102,7 @@ pub async fn handle_incoming_img(img_packet: ImagePacket) -> Result<(), Box<dyn 
     let mut last_clip_img_hash = LAST_CLIP_IMG_HASH.lock().await;
 
     if img_packet.hash != *last_clip_img_hash {
-        info!("Adding new incoming img. Hash: {}", img_packet.hash);
+        info!("Clip img received");
         let mut clipboard = match Clipboard::new(){
             Ok(cb) => cb,
             Err(e) => {
