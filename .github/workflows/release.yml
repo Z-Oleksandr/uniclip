@@ -1,0 +1,42 @@
+name: Release
+
+on:
+    push:
+        tags:
+            - "v*"
+
+jobs:
+    build:
+        name: Build for ${{ matrix.os }}
+        runs-on: ${{ matrix.os }}
+
+        strategy:
+            matrix:
+                os: [ubuntu-latest, macos-latest, windows-latest]
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Install Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Build binary
+              run: cargo build --release
+
+            - name: Rename executable for platform
+              run: |
+                  if [[ "$RUNNER_OS" == "Windows" ]]; then mv target/release/uniclip.exe uniclip-windows.exe; fi
+                  if [[ "$RUNNER_OS" == "Linux" ]]; then mv target/release/uniclip uniclip-linux; fi
+                  if [[ "$RUNNER_OS" == "macOS" ]]; then mv target/release/uniclip uniclip-macos; fi
+              shell: bash
+
+            - name: Upload release asset
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: |
+                      uniclip-windows.exe
+                      uniclip-linux
+                      uniclip-macos
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
